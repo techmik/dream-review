@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+# Working files never belong in the repo (they live in the plugin data folder),
+# but guard against a stray copy anyway.
+intake/
+dream_report*.md
+*_state.json
+skill_patterns*.json

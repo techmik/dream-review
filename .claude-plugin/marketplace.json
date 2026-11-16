@@ -1,0 +1,15 @@
+{
+  "name": "dream-review",
+  "description": "dream-review: a review-first memory dreaming plugin for Claude Code.",
+  "owner": {
+    "name": "techmik",
+    "email": "599635+techmik@users.noreply.github.com"
+  },
+  "plugins": [
+    {
+      "name": "dream-review",
+      "source": "./",
+      "description": "Review-first memory dreaming for Claude Code: proposes, never applies."
+    }
+  ]
+}
