@@ -39,10 +39,10 @@ The first pass in a project looks back 24 hours. After that each pass starts whe
 
 ## Where things live
 
-All working files are kept per project in the plugin's data folder, so a plugin update never wipes them:
+All working files are kept per project in their own folder, outside the plugin (so an update never wipes them) and outside `~/.claude/` (Claude Code protects that folder, so Claude's writes there always stop for approval and an unattended pass couldn't write its report). Set `DREAM_REVIEW_HOME` to use another location.
 
 ```
-~/.claude/plugins/data/<plugin-id>/projects/<project>/
+~/.dream-review/projects/<project>/
   dream_report.md          the report (newest night first)
   dream_report_archive.md  reviewed sections older than 7 days
   skill_patterns.json      tags per night, for skill candidates
@@ -79,15 +79,15 @@ A pass can run on a schedule, but only if it never stops at a permission prompt.
 2. **Claude Desktop scheduled task:** create a daily task in the project with the prompt `Run the dream-review pass.`
 3. **Headless `claude -p` from cron or Task Scheduler:** see `examples/run_unattended.py`.
 
-The skill pre-approves its own script commands. For the file reads and writes, add rules like these to the project's `.claude/settings.json` (or your user settings):
+The skill pre-approves its own script commands. For starting the skill and for its file reads and writes, add rules like these to your user settings (`~/.claude/settings.json`), or to the project's `.claude/settings.json`. Claude Code ignores a project's permission rules until you've opened that folder interactively once and accepted the trust prompt, so do that first if you use the project file. A headless runner can also pass them with `claude -p --settings <file>`.
 
 ```json
 {
   "permissions": {
     "allow": [
-      "Read(~/.claude/plugins/data/dream-review*/**)",
-      "Write(~/.claude/plugins/data/dream-review*/**)",
-      "Edit(~/.claude/plugins/data/dream-review*/**)",
+      "Skill(dream-review:dream-review)",
+      "Read(~/.dream-review/**)",
+      "Edit(~/.dream-review/**)",
       "Read(~/.claude/skills/**)",
       "Read(.claude/skills/**)"
     ]
@@ -95,7 +95,7 @@ The skill pre-approves its own script commands. For the file reads and writes, a
 }
 ```
 
-The folder name after `data/` depends on how the plugin was installed; "where is my dream report?" prints the exact path, and you can use that instead of the wildcard. Add `Read(...)` for your `hook_block_log` if you use one. Then run the pass once by hand in a fresh session and check that it finished without asking you anything.
+An `Edit(...)` rule covers every file-writing tool, including creating new files; a `Write(...)` rule isn't matched. If you set `DREAM_REVIEW_HOME`, use that folder in the two rules instead. Add `Read(...)` for your `hook_block_log` if you use one. Then run the pass once by hand in a fresh session and check that it finished without asking you anything.
 
 Only one pass runs per project at a time. A second one that starts while the first is still going stops without writing anything. If a pass dies partway, its lock clears itself after two hours.
 

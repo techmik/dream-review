@@ -1,6 +1,6 @@
 {
   "name": "dream-review",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "A review-first \"dreaming\" pass over Claude Code's auto-memory: reads recent sessions, proposes new, stale and duplicate memories with quoted evidence, and never writes memory without your approval.",
   "author": {
     "name": "techmik",

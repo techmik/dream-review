@@ -11,7 +11,7 @@ Two separate flows:
 - **The pass** (nightly or on request): scan, propose, write the report. Changes nothing but the report and the plugin's own working files.
 - **The review** (always started by the user): walk through the report together and apply only what the user approves.
 
-Working files live in the plugin's data folder, one workspace per project (`${CLAUDE_PLUGIN_DATA}/projects/<project>/`), never in the plugin folder. The scan prints every path you need.
+Working files live in `~/.dream-review/projects/<project>/` (or under `DREAM_REVIEW_HOME` if set), one workspace per project. They're kept out of `~/.claude/` on purpose: Claude Code protects that folder, so writes there would always stop for approval. The scan prints every path you need.
 
 In every command below, use `python3` on macOS and Linux. On Windows use `python` with the same arguments instead: there `python3` often opens the Microsoft Store stub rather than Python. Run the commands exactly as written: an unattended run only gets through without permission prompts when the command matches the allowlist.
 
@@ -22,8 +22,7 @@ In every command below, use `python3` on macOS and Linux. On Windows use `python
 ### 1. Scan
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"
-```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --project-dir "${CLAUDE_PROJECT_DIR}"```
 
 Add `--hours N` only for a deliberate catch-up; normally the window starts at the last successful run's checkpoint.
 
@@ -100,22 +99,22 @@ Write `None found.` under any empty heading. If `complete` is false, add a line:
 If the pass can't finish (the report write fails, or you have to stop), release the lock without saving a checkpoint:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --abandon
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}" --abandon
 ```
 
-### 6. Mark the checkpoint (only after the report is written)
+### 6. Mark the checkpoint (only after the report write has succeeded)
+
+Run this in a later step than the report write, never alongside it, and only once the write came back without an error. The script checks that the report holds this run's `Run <run_id>` line and refuses otherwise; if it refuses, fix the report write or use `--abandon`.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"
-```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}"```
 
 It saves the checkpoint and releases the lock. If the scan was incomplete it leaves the checkpoint where it was, so the next run tries those files again. Only add `--accept-incomplete` if the user tells you to skip them.
 
 ### 7. Archive old reviewed sections
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"
-```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" --project-dir "${CLAUDE_PROJECT_DIR}"```
 
 Moves sections reviewed 7+ days ago (configurable) to the archive file. Unreviewed sections never move. If it errors, mention it and carry on; it doesn't lose data.
 
@@ -137,14 +136,13 @@ When the user asks to review the report:
 
 1. Get the paths without scanning (this reads and changes nothing):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}" --paths-only
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --project-dir "${CLAUDE_PROJECT_DIR}" --paths-only
    ```
    If `pass_running` isn't null, a pass is writing the report right now: tell the user and wait for it to finish. Otherwise `Read` `report_file` and go through the unreviewed sections with the user, one proposal at a time or in batches they choose.
 2. **Re-check each proposal against the current files before applying it.** Days can pass between the pass and the review, and a proposal may already be done or out of date.
 3. Before the first change, take a snapshot of the memory folder (it only commits if that folder is already a git repo):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" --project-dir "${CLAUDE_PROJECT_DIR}" --data-dir "${CLAUDE_PLUGIN_DATA}"
-   ```
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" --project-dir "${CLAUDE_PROJECT_DIR}"   ```
    If it says FAILED, stop and tell the user. Only go on without a snapshot if they say so.
 4. Apply only what the user approves ("apply all" counts). Write memory files in the same format as the existing ones and update `MEMORY.md`'s index in the same pass. A skill candidate isn't applied: the user builds it later, declines it or parks it.
 5. When a section is fully reviewed, add `**Reviewed YYYY-MM-DD:** <one-line outcome per proposal>` at the end of that section. Never delete sections; the report is a running log, and the Reviewed line is what stops the start-of-session reminder and lets the archive step move it later.

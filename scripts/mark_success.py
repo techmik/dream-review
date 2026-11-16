@@ -2,7 +2,8 @@
 """Finish a pass: save the checkpoint and release the pass lock.
 
 Run it only after the report for that scan has been written. Marking early
-would let a failed pass skip its material for good.
+would let a failed pass skip its material for good, so it checks: the report
+must already contain this run's "Run <run_id>" line, or nothing is saved.
 
 It reads window_end and run_id from the scan manifest, so the command line
 stays the same every run (easy to allowlist), and it only acts if that run
@@ -55,6 +56,18 @@ def main():
         c.release_lock(ws, run_id)
         print(json.dumps({"abandoned": run_id, "checkpoint": "unchanged"}))
         return 0
+
+    # Proof the report was written: it must hold this run's "Run <run_id>" line.
+    report = ws / c.REPORT_NAME
+    try:
+        has_section = f"Run {run_id}" in report.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        has_section = False
+    if not has_section:
+        print(json.dumps({"error": f"{report} has no section for run {run_id} yet; checkpoint NOT saved. "
+                                   "Write the report first and run this again, or run it with --abandon "
+                                   "if the pass can't finish.", "run_id": run_id}))
+        return 1
 
     if not manifest.get("complete", False) and not args.accept_incomplete:
         c.release_lock(ws, run_id)

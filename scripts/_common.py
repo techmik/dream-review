@@ -4,13 +4,17 @@ Every script takes the same two inputs:
 
   --project-dir  the Claude Code project being reviewed (default: the
                  CLAUDE_PROJECT_DIR environment variable, then the cwd)
-  --data-dir     the plugin's persistent data folder (default: the
-                 CLAUDE_PLUGIN_DATA environment variable, then
-                 ~/.claude/plugins/data/dream-review)
+  --data-dir     where working files live (default: the DREAM_REVIEW_HOME
+                 environment variable, then ~/.dream-review)
 
-All working files live under <data-dir>/projects/<project-slug>/, never
-inside the plugin's own install folder: a plugin update replaces that folder,
-which would wipe the checkpoint, the intake shards and the report.
+All working files live under <data-dir>/projects/<project-slug>/.
+
+Why not the plugin's own folders: the install folder is replaced on every
+update (it would wipe the checkpoint and the report), and the plugin data
+folder (~/.claude/plugins/data/...) sits under ~/.claude/, which Claude Code
+treats as a protected path: Claude's own writes there always need a manual
+approval, and permission rules can't pre-approve them, so an unattended pass
+could never write its report.
 """
 import hashlib
 import json
@@ -61,10 +65,10 @@ def resolve_project_dir(arg):
 def resolve_data_dir(arg):
     if arg:
         return Path(arg).expanduser()
-    env = os.environ.get("CLAUDE_PLUGIN_DATA")
+    env = os.environ.get("DREAM_REVIEW_HOME")
     if env:
         return Path(env).expanduser()
-    return Path.home() / ".claude" / "plugins" / "data" / "dream-review"
+    return Path.home() / ".dream-review"
 
 
 # ---------------------------------------------------------------- time

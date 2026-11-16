@@ -40,11 +40,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common as c  # noqa: E402
 
-# Each shard stays under this many characters so one default Read call fits
-# (character count predicts tokens far better than line count).
-MAX_SHARD_CHARS = 50000
+# Each shard stays under this many characters so one default Read call fits,
+# with room under read-size limits as low as 40 KB (character count predicts
+# tokens far better than line count; non-ASCII text takes more bytes).
+MAX_SHARD_CHARS = 30000
 # A single memory bigger than this is split into numbered parts.
-MAX_ITEM_CHARS = 40000
+MAX_ITEM_CHARS = 24000
 SETTLE_MINUTES = 10
 REAL_TURN_TYPES = {"user", "assistant"}
 

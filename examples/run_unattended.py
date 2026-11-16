@@ -17,6 +17,10 @@ import sys
 from pathlib import Path
 
 PROJECT_DIR = Path("/path/to/your/project")  # <- change this
+# Optional: a settings file holding the permission rules from the README.
+# Passed with --settings, it applies even if the project folder hasn't been
+# trusted yet. Set to None if the rules are already in your user settings.
+SETTINGS_FILE = None  # e.g. Path("/path/to/dream-review-settings.json")
 PROMPT = "Run the dream-review pass."
 TIMEOUT_SECONDS = 30 * 60
 LOG = Path(__file__).with_suffix(".log")
@@ -33,7 +37,10 @@ def main():
         log(f"FAILED: PROJECT_DIR not found: {PROJECT_DIR}")
         return 1
     try:
-        result = subprocess.run(["claude", "-p", PROMPT], cwd=PROJECT_DIR,
+        cmd = ["claude", "-p"]
+        if SETTINGS_FILE:
+            cmd += ["--settings", str(SETTINGS_FILE)]
+        result = subprocess.run(cmd + [PROMPT], cwd=PROJECT_DIR,
                                 capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     except FileNotFoundError:
         log("FAILED: `claude` not on PATH")
