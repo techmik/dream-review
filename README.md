@@ -104,7 +104,9 @@ Many setups keep memory in an Obsidian vault or a folder of notes instead of (or
 - `routing`: with two sources, one line in your own words on what goes where.
 - `rules_note`, `templates`: used only when the review applies a change, for formatting (frontmatter, folder index lines, note shape). They can't authorize anything else.
 
-The pass reads your vault only through the plugin's own scripts and writes nothing to it. Proposals name the exact note, heading and text. The review backs up each file, refuses to edit one that changed since the pass without asking you again, and never deletes or renames anything. ### Daily notes (optional)
+The pass reads your vault only through the plugin's own scripts and writes nothing to it. Proposals name the exact note, heading and text. The review backs up each file, refuses to edit one that changed since the pass without asking you again, and never deletes or renames anything.
+
+### Daily notes (optional)
 
 If your vault keeps a note per day, the pass can propose a **reconstructed session entry** for each past day's session the note doesn't already have. It's off until you set it:
 
