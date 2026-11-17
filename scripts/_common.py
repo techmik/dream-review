@@ -200,8 +200,14 @@ def memory_dir(project_dir):
     return base / _encodings(root)[0] / "memory"
 
 
+def workspace_path(data_dir, project_dir):
+    """The project's workspace folder, without creating it."""
+    return data_dir / "projects" / project_slug(project_dir)
+
+
 def workspace(data_dir, project_dir):
-    ws = data_dir / "projects" / project_slug(project_dir)
+    """The project's workspace folder, created if missing."""
+    ws = workspace_path(data_dir, project_dir)
     ws.mkdir(parents=True, exist_ok=True)
     return ws
 
@@ -266,6 +272,19 @@ def acquire_lock(ws, run_id):
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(info, f)
     return True, None
+
+
+def refresh_lock(ws, run_id):
+    """Heartbeat: reset the lock's age if this run still holds it, so a long
+    pass isn't taken for a dead one. Returns True if refreshed."""
+    lock = ws / LOCK_NAME
+    info = read_json(lock)
+    if not isinstance(info, dict) or info.get("run_id") != run_id:
+        return False
+    info["epoch"] = time.time()
+    info["heartbeat"] = datetime.now(timezone.utc).isoformat()
+    atomic_write(lock, json.dumps(info))
+    return True
 
 
 def release_lock(ws, run_id):

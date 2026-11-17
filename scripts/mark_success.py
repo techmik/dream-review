@@ -17,9 +17,12 @@ only when the user has decided to skip those files.
 --abandon releases this run's lock without saving a checkpoint (use it when
 the pass fails before the report is written).
 
+--heartbeat only resets the lock's age (this run must still hold it), so a
+long pass isn't mistaken for a dead one after two hours. It saves nothing.
+
 Usage:
     python mark_success.py [--project-dir P] [--data-dir D]
-                           [--accept-incomplete | --abandon]
+                           [--accept-incomplete | --abandon | --heartbeat]
 """
 import argparse
 import json
@@ -37,6 +40,7 @@ def main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--accept-incomplete", action="store_true")
     group.add_argument("--abandon", action="store_true")
+    group.add_argument("--heartbeat", action="store_true")
     args = parser.parse_args()
     ws = c.workspace(c.resolve_data_dir(args.data_dir), c.resolve_project_dir(args.project_dir))
 
@@ -51,6 +55,13 @@ def main():
                                    "started, or the lock went stale); checkpoint NOT saved",
                           "run_id": run_id}))
         return 1
+
+    if args.heartbeat:
+        if not c.refresh_lock(ws, run_id):
+            print(json.dumps({"error": "lock not refreshed (no longer held by this run)", "run_id": run_id}))
+            return 1
+        print(json.dumps({"heartbeat": run_id}))
+        return 0
 
     if args.abandon:
         c.release_lock(ws, run_id)
@@ -72,8 +83,10 @@ def main():
     if not manifest.get("complete", False) and not args.accept_incomplete:
         c.release_lock(ws, run_id)
         print(json.dumps({"checkpoint": "unchanged",
-                          "reason": "scan was incomplete (unreadable transcripts); the next run retries this window",
-                          "unreadable": manifest.get("skipped", {}).get("unreadable_transcripts", [])}))
+                          "reason": "scan was incomplete (unreadable transcripts or memory files); "
+                                    "the next run retries this window",
+                          "unreadable": manifest.get("skipped", {}).get("unreadable_transcripts", [])
+                                        + manifest.get("skipped", {}).get("unreadable_memories", [])}))
         return 0
 
     state_file = ws / c.STATE_NAME

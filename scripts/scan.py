@@ -5,8 +5,9 @@ Reads this project's recent Claude Code session transcripts and its existing
 auto-memory files and writes them as JSON shards the dream-review skill can
 Read. It drafts no proposals, calls no model and never touches a memory file.
 It writes only inside its own workspace (<data-dir>/projects/<slug>/): the
-pass lock, the manifest, this run's intake folder, and it removes older
-runs' intake folders.
+pass lock, the manifest, this run's intake folder, and it removes earlier
+runs' intake folders once they're over a day old. With --paths-only it
+writes nothing at all.
 
 What it keeps from a transcript: the visible text of "user" and "assistant"
 turns. Tool calls, tool results, images, thinking blocks and meta records
@@ -15,7 +16,8 @@ purpose. Subagent transcripts (in per-session subfolders) are not read.
 
 Nothing is skipped silently: unreadable files, malformed records, torn lines
 and cut-off turns are all counted in the manifest's "skipped" block. If a
-transcript couldn't be read, the manifest says "complete": false and
+transcript or a memory file couldn't be read, the manifest says
+"complete": false and
 mark_success.py refuses to move the checkpoint past it.
 
 The window ends 10 minutes before "now", so turns still being written (the
@@ -41,12 +43,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common as c  # noqa: E402
 
-# Each shard stays under this many characters so one default Read call fits,
-# with room under read-size limits as low as 40 KB (character count predicts
-# tokens far better than line count; non-ASCII text takes more bytes).
+# Each shard file, as written, stays under BOTH limits so one default Read
+# call fits, with room under read-size gates as low as 40 KB. Characters
+# predict tokens; bytes are what a size gate measures (non-ASCII text takes
+# 2-4 bytes per character in UTF-8). A memory or turn too big for one shard
+# on its own is split into numbered parts.
 MAX_SHARD_CHARS = 30000
-# A single memory bigger than this is split into numbered parts.
-MAX_ITEM_CHARS = 24000
+MAX_SHARD_BYTES = 36000
+# Intake folders from earlier runs are removed once older than this; a newer
+# one may belong to a pass whose lock was taken over as stale but which is
+# still reading its shards.
+INTAKE_KEEP_HOURS = 24
 SETTLE_MINUTES = 10
 REAL_TURN_TYPES = {"user", "assistant"}
 
@@ -172,34 +179,78 @@ def _load_memories(mem_dir, skipped):
             "type": meta.get("type", fm.get("type", "")),
             "description": fm.get("description", ""),
         }
-        body = body.strip()
-        chunks = [body[i:i + MAX_ITEM_CHARS] for i in range(0, len(body), MAX_ITEM_CHARS)] or [""]
-        for n, chunk in enumerate(chunks, 1):
-            item = dict(base, body=chunk)
-            if len(chunks) > 1:
-                item["part"] = f"{n}/{len(chunks)}"
-            items.append(item)
+        items.append(dict(base, body=body.strip()))
     return items, files
 
 
-def _write_shards(items, folder, label):
-    if not items:
-        return []
-    files, batch, size, n = [], [], 2, 1
+def _dump(obj):
+    # ensure_ascii=False: non-ASCII text stays as itself (UTF-8), not \uXXXX
+    # escapes that make a shard up to six times longer than its content.
+    return json.dumps(obj, indent=2, ensure_ascii=False)
+
+
+def _entry_size(item):
+    """(chars, bytes) one item adds inside a shard's JSON list: its own
+    serialization, every line indented two more spaces."""
+    s = _dump(item)
+    extra = 2 * (s.count("\n") + 1)
+    return len(s) + extra, len(s.encode("utf-8")) + extra
+
+
+def _batch_size(sizes):
+    """(chars, bytes) of json.dumps(list, indent=2) for items of these sizes:
+    "[\\n" + items joined by ",\\n" + "\\n]"."""
+    k = len(sizes)
+    overhead = 4 + 2 * (k - 1)
+    return (sum(s[0] for s in sizes) + overhead, sum(s[1] for s in sizes) + overhead)
+
+
+def _fits(sizes):
+    chars, nbytes = _batch_size(sizes)
+    return chars <= MAX_SHARD_CHARS and nbytes <= MAX_SHARD_BYTES
+
+
+def _split_item(item, field):
+    """Split item[field] into numbered parts that each fit a shard alone."""
+    if _fits([_entry_size(item)]):
+        return [item]
+    text, pieces, pos = item[field], [], 0
+    while pos < len(text):
+        # Largest slice from pos that fits (binary search); the "part" label
+        # is sized at its widest so relabelling below can't overflow.
+        lo, hi = 1, len(text) - pos
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            probe = dict(item, **{field: text[pos:pos + mid]}, part="99999/99999")
+            if _fits([_entry_size(probe)]):
+                lo = mid
+            else:
+                hi = mid - 1
+        pieces.append(text[pos:pos + lo])
+        pos += lo
+    total = len(pieces)
+    return [dict(item, **{field: p}, part=f"{n}/{total}") for n, p in enumerate(pieces, 1)]
+
+
+def _write_shards(items, folder, label, field):
+    """Write items as JSON-list shards that each stay under both limits."""
+    pieces = [p for item in items for p in _split_item(item, field)]
+    files, batch, sizes = [], [], []
 
     def flush():
-        p = folder / f"{label}_{n:03d}.json"
-        p.write_text(json.dumps(batch, indent=2), encoding="utf-8")
+        p = folder / f"{label}_{len(files) + 1:03d}.json"
+        # Bytes, not write_text: on Windows text mode turns every "\n" into
+        # "\r\n", which would push a full shard past its limits.
+        p.write_bytes(_dump(batch).encode("utf-8"))
         files.append(str(p))
 
-    for item in items:
-        item_size = len(json.dumps(item, indent=2)) + 2
-        if batch and size + item_size > MAX_SHARD_CHARS:
+    for piece in pieces:
+        size = _entry_size(piece)
+        if batch and not _fits(sizes + [size]):
             flush()
-            n += 1
-            batch, size = [], 2
-        batch.append(item)
-        size += item_size
+            batch, sizes = [], []
+        batch.append(piece)
+        sizes.append(size)
     if batch:
         flush()
     return files
@@ -215,7 +266,9 @@ def main():
     args = parser.parse_args()
 
     project_dir = c.resolve_project_dir(args.project_dir)
-    ws = c.workspace(c.resolve_data_dir(args.data_dir), project_dir)
+    data_dir = c.resolve_data_dir(args.data_dir)
+    # --paths-only creates nothing, not even the workspace folder.
+    ws = c.workspace_path(data_dir, project_dir) if args.paths_only else c.workspace(data_dir, project_dir)
     config = c.load_config(ws)
     sess_dir = c.sessions_dir(project_dir)
     mem_dir = c.memory_dir(project_dir)
@@ -281,10 +334,18 @@ def main():
         errors.append(f"no auto-memory folder yet: {mem_dir}")
 
     # This run's shards go in their own folder, so an overlapping reader
-    # never sees a half-replaced set; older runs' folders are removed.
+    # never sees a half-replaced set. Earlier runs' folders are removed only
+    # once older than INTAKE_KEEP_HOURS: a pass whose lock this run took over
+    # as stale may still be reading its own.
     intake_root = ws / "intake"
     intake_root.mkdir(exist_ok=True)
+    keep_after = now.timestamp() - INTAKE_KEEP_HOURS * 3600
     for old in intake_root.iterdir():
+        try:
+            if old.stat().st_mtime >= keep_after:
+                continue
+        except OSError:
+            continue
         if old.is_dir():
             shutil.rmtree(old, ignore_errors=True)
         else:
@@ -295,7 +356,9 @@ def main():
     intake = intake_root / run_id
     intake.mkdir()
 
-    complete = not skipped["unreadable_transcripts"]
+    # Unreadable memories make the comparison incomplete too: the checkpoint
+    # holds, so the window is compared again once they can be read.
+    complete = not skipped["unreadable_transcripts"] and not skipped["unreadable_memories"]
     manifest = {
         "run_id": run_id,
         "complete": complete,
@@ -315,8 +378,8 @@ def main():
         "sessions_scanned": sorted(sessions),
         "turn_count": len(turns),
         "existing_memory_count": len(memory_files),
-        "turns_shard_files": _write_shards(turns, intake, "turns"),
-        "memories_shard_files": _write_shards(memories, intake, "memories"),
+        "turns_shard_files": _write_shards(turns, intake, "turns", "text"),
+        "memories_shard_files": _write_shards(memories, intake, "memories", "body"),
         "skipped": skipped,
         "errors": errors,
         "warning": None if turns else "no session turns in this window (a quiet period, not an error)",

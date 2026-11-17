@@ -1,7 +1,7 @@
 ---
 name: dream-review
 description: Review-first "dreaming" pass over Claude Code's auto-memory. Reads this project's recent session transcripts, compares them with the existing memory files, and writes proposals (new memories, stale ones, duplicates or conflicts, plus skill candidates from repeated work and optional rule candidates from repeated hook blocks) to a report, each with quoted evidence. Never writes a memory file on its own; applying a proposal needs the user's approval in a separate review. Use when the user says "run dream-review", "dream", "run the dream pass", "review my dreams", "what did the dream pass find", "where is my dream report", or when a scheduled prompt asks for the dream-review pass.
-allowed-tools: Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *)
+allowed-tools: Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" *)
 ---
 
 # dream-review
@@ -28,9 +28,17 @@ Add `--hours N` only for a deliberate catch-up; normally the window starts at th
 
 If it prints an `error` saying another pass is running, **stop**: write nothing, and say so in the summary.
 
-Otherwise it prints a small manifest: `run_id`, `complete`, `report_file`, `patterns_file`, `memory_dir`, `memory_files`, `hook_block_log`, `run_started_utc`, the window, counts, `skipped`, `errors`, and two lists of absolute paths, `turns_shard_files` and `memories_shard_files`. **Read every listed shard with one plain `Read` call each, in order.** Each shard is sized to fit one call. Don't inspect them with a shell command. If a `Read` result says the file was cut short, read the rest with `offset` before going on. An empty list means nothing to read.
+Otherwise it prints a small manifest: `run_id`, `complete`, `report_file`, `patterns_file`, `memory_dir`, `memory_files`, `hook_block_log`, `run_started_utc`, the window, counts, `skipped`, `errors`, and two lists of absolute paths, `turns_shard_files` and `memories_shard_files`. **Read every listed shard with one plain `Read` call each, in order.** Each shard is sized to fit one call. Don't inspect them with a shell command. If a `Read` result says the file was cut short, read the rest with `offset` before going on. An empty list means nothing to read. A turn or memory too long for one shard comes in numbered `part`s ("2/3"), possibly across shards; read them as one.
 
-`memories_shard_files` holds the full text of every top-level `.md` file in the memory folder, `MEMORY.md` included (marked `"index": true`, as is any `MEMORY-*.md` companion index; these list memories rather than being memories, so check them for missing or dead entries but don't propose merging them with memory files). A very long file comes in numbered `part`s. Treat the shards as the complete source; don't open the memory folder yourself. Files in subfolders aren't scanned.
+When you've read every shard, refresh the pass lock so a long pass isn't taken for a dead one:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}" --heartbeat
+```
+
+If it reports an error, another pass has taken over: stop, write nothing, and say so in the summary.
+
+`memories_shard_files` holds the full text of every top-level `.md` file in the memory folder, `MEMORY.md` included (marked `"index": true`, as is any `MEMORY-*.md` companion index; these list memories rather than being memories, so check them for missing or dead entries but don't propose merging them with memory files). Treat the shards as the complete source; don't open the memory folder yourself. Files in subfolders aren't scanned.
 
 If `errors` names a missing session folder or memory folder, say so in the summary. A first run in a project with no memory yet is normal.
 
@@ -65,7 +73,7 @@ Only if the manifest's `hook_block_log` is set and the file exists; otherwise wr
 
 ### 5. Write the report
 
-`Read` `report_file`. If it doesn't exist, `Write` it starting with `# Dream Report`. Insert the new section **at the top, right under the title** (newest first). Never overwrite or remove earlier sections. Before adding a proposal, skim unreviewed sections and skip exact repeats.
+First run the same `--heartbeat` command as in step 1 (stop as described there if it errors). Then `Read` `report_file`. If it doesn't exist, `Write` it starting with `# Dream Report`. Insert the new section **at the top, right under the title** (newest first). Never overwrite or remove earlier sections. Before adding a proposal, skim unreviewed sections and skip exact repeats.
 
 The header time is the manifest's `run_started_utc` (don't use your own clock). Format:
 
@@ -94,7 +102,7 @@ Skipped: <non-zero counts from the manifest's skipped block, or "nothing">.
 None found.
 ```
 
-Write `None found.` under any empty heading. If `complete` is false, add a line: `Incomplete scan: <unreadable files>; the next run retries this window.`
+Write `None found.` under any empty heading. If `complete` is false, add a line: `Incomplete scan: <unreadable transcripts and memory files>; the next run retries this window.`
 
 If the pass can't finish (the report write fails, or you have to stop), release the lock without saving a checkpoint:
 

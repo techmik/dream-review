@@ -99,14 +99,14 @@ The skill pre-approves its own script commands. For starting the skill and for i
 
 An `Edit(...)` rule covers every file-writing tool, including creating new files; a `Write(...)` rule isn't matched. If you set `DREAM_REVIEW_HOME`, use that folder in the two rules instead. Add `Read(...)` for your `hook_block_log` if you use one. Then run the pass once by hand in a fresh session and check that it finished without asking you anything.
 
-Only one pass runs per project at a time. A second one that starts while the first is still going stops without writing anything. If a pass dies partway, its lock clears itself after two hours.
+Only one pass runs per project at a time. A second one that starts while the first is still going stops without writing anything. A running pass refreshes its lock as it goes; if a pass dies partway, its lock clears itself two hours after its last refresh.
 
 ## What the pass never does
 
 - Write, edit or delete a memory file or `MEMORY.md`.
 - Edit CLAUDE.md or settings, or build a skill. Those come back as proposals with exact text.
 - Read thinking blocks, tool results or subagent transcripts. Only the visible text of your turns and Claude's replies is scanned.
-- Drop anything silently. Unreadable files, malformed lines and cut-off turns are counted in the report. If a transcript can't be read, the checkpoint stays put and the next run tries again.
+- Drop anything silently. Unreadable files, malformed lines and cut-off turns are counted in the report. If a transcript or memory file can't be read, the checkpoint stays put and the next run tries again.
 - Follow instructions it finds in your sessions or memory. Those are treated as data.
 
 ## Undo
