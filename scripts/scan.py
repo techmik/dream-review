@@ -42,14 +42,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common as c  # noqa: E402
+import _vault as v  # noqa: E402
+from _shards import write_shards  # noqa: E402
 
-# Each shard file, as written, stays under BOTH limits so one default Read
-# call fits, with room under read-size gates as low as 40 KB. Characters
-# predict tokens; bytes are what a size gate measures (non-ASCII text takes
-# 2-4 bytes per character in UTF-8). A memory or turn too big for one shard
-# on its own is split into numbered parts.
-MAX_SHARD_CHARS = 30000
-MAX_SHARD_BYTES = 36000
+# Shard size limits and splitting live in _shards.py.
 # Intake folders from earlier runs are removed once older than this; a newer
 # one may belong to a pass whose lock was taken over as stale but which is
 # still reading its shards.
@@ -183,77 +179,14 @@ def _load_memories(mem_dir, skipped):
     return items, files
 
 
-def _dump(obj):
-    # ensure_ascii=False: non-ASCII text stays as itself (UTF-8), not \uXXXX
-    # escapes that make a shard up to six times longer than its content.
-    return json.dumps(obj, indent=2, ensure_ascii=False)
+_write_shards = write_shards
 
 
-def _entry_size(item):
-    """(chars, bytes) one item adds inside a shard's JSON list: its own
-    serialization, every line indented two more spaces."""
-    s = _dump(item)
-    extra = 2 * (s.count("\n") + 1)
-    return len(s) + extra, len(s.encode("utf-8")) + extra
-
-
-def _batch_size(sizes):
-    """(chars, bytes) of json.dumps(list, indent=2) for items of these sizes:
-    "[\\n" + items joined by ",\\n" + "\\n]"."""
-    k = len(sizes)
-    overhead = 4 + 2 * (k - 1)
-    return (sum(s[0] for s in sizes) + overhead, sum(s[1] for s in sizes) + overhead)
-
-
-def _fits(sizes):
-    chars, nbytes = _batch_size(sizes)
-    return chars <= MAX_SHARD_CHARS and nbytes <= MAX_SHARD_BYTES
-
-
-def _split_item(item, field):
-    """Split item[field] into numbered parts that each fit a shard alone."""
-    if _fits([_entry_size(item)]):
-        return [item]
-    text, pieces, pos = item[field], [], 0
-    while pos < len(text):
-        # Largest slice from pos that fits (binary search); the "part" label
-        # is sized at its widest so relabelling below can't overflow.
-        lo, hi = 1, len(text) - pos
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            probe = dict(item, **{field: text[pos:pos + mid]}, part="99999/99999")
-            if _fits([_entry_size(probe)]):
-                lo = mid
-            else:
-                hi = mid - 1
-        pieces.append(text[pos:pos + lo])
-        pos += lo
-    total = len(pieces)
-    return [dict(item, **{field: p}, part=f"{n}/{total}") for n, p in enumerate(pieces, 1)]
-
-
-def _write_shards(items, folder, label, field):
-    """Write items as JSON-list shards that each stay under both limits."""
-    pieces = [p for item in items for p in _split_item(item, field)]
-    files, batch, sizes = [], [], []
-
-    def flush():
-        p = folder / f"{label}_{len(files) + 1:03d}.json"
-        # Bytes, not write_text: on Windows text mode turns every "\n" into
-        # "\r\n", which would push a full shard past its limits.
-        p.write_bytes(_dump(batch).encode("utf-8"))
-        files.append(str(p))
-
-    for piece in pieces:
-        size = _entry_size(piece)
-        if batch and not _fits(sizes + [size]):
-            flush()
-            batch, sizes = [], []
-        batch.append(piece)
-        sizes.append(size)
-    if batch:
-        flush()
-    return files
+def _source_summary(src):
+    if src["type"] == "native":
+        return {"id": src["id"], "type": "native"}
+    return {"id": src["id"], "type": "vault", "root": str(src["root"]),
+            "core": src["core"], "exclude": v.DEFAULT_EXCLUDES + src["exclude"]}
 
 
 def main():
@@ -263,13 +196,18 @@ def main():
     parser.add_argument("--hours", type=float, default=None)
     parser.add_argument("--paths-only", action="store_true",
                         help="print the workspace paths and lock state, then exit; changes nothing")
+    parser.add_argument("--suggest-setup", action="store_true",
+                        help="look at the memory setup and print a draft sources config; changes nothing")
     args = parser.parse_args()
 
     project_dir = c.resolve_project_dir(args.project_dir)
     data_dir = c.resolve_data_dir(args.data_dir)
-    # --paths-only creates nothing, not even the workspace folder.
-    ws = c.workspace_path(data_dir, project_dir) if args.paths_only else c.workspace(data_dir, project_dir)
-    config = c.load_config(ws)
+    read_only = args.paths_only or args.suggest_setup
+    # --paths-only and --suggest-setup create nothing, not even the workspace folder.
+    ws = c.workspace_path(data_dir, project_dir) if read_only else c.workspace(data_dir, project_dir)
+    config, problems = v.read_config(ws)
+    sources, source_problems = v.resolve_sources(config, ws)
+    problems += source_problems
     sess_dir = c.sessions_dir(project_dir)
     mem_dir = c.memory_dir(project_dir)
 
@@ -280,10 +218,23 @@ def main():
             "archive_file": str(ws / c.ARCHIVE_NAME),
             "patterns_file": str(ws / c.PATTERNS_NAME),
             "config_file": str(ws / c.CONFIG_NAME),
+            "backups_dir": str(ws / "backups"),
             "memory_dir": str(mem_dir),
             "sessions_dir": str(sess_dir),
+            "sources": [_source_summary(s) for s in sources],
+            "rules_note": config["rules_note"],
+            "templates": config["templates"],
+            "routing": config["routing"],
+            "config_problems": problems,
             "pass_running": c.read_lock(ws),
         }, indent=2))
+        return 0
+
+    if args.suggest_setup:
+        out = v.suggest_setup(project_dir, mem_dir)
+        out["config_file"] = str(ws / c.CONFIG_NAME)
+        out["current_config_problems"] = problems
+        print(json.dumps(out, indent=2))
         return 0
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
@@ -293,6 +244,16 @@ def main():
                           "lock": holder, "action": "stop; do not write a report"}))
         return 3
 
+    if problems:
+        # Never fall back to native-only without saying so: stop, report.
+        c.release_lock(ws, run_id)
+        print(json.dumps({"error": "config_problem", "config_problems": problems,
+                          "config_file": str(ws / c.CONFIG_NAME),
+                          "report_file": str(ws / c.REPORT_NAME),
+                          "action": "write a Config problem section (see SKILL.md); no checkpoint"}, indent=2))
+        return 4
+
+    fp = v.fingerprint(sources)
     now = datetime.now(timezone.utc)
     end = now - timedelta(minutes=SETTLE_MINUTES)
     start, source = None, None
@@ -302,12 +263,18 @@ def main():
         state = c.read_json(ws / c.STATE_NAME) or {}
         start = c.parse_iso_utc(state.get("last_successful_scan_through")) if isinstance(state, dict) else None
         source = "last_successful_run" if start else None
+        # Sources changed since the checkpoint (a checkpoint from before
+        # 0.2.0 counts as the native default): compare the first-run window
+        # again against the new sources.
+        if start is not None and state.get("sources_fingerprint", v.DEFAULT_FINGERPRINT) != fp:
+            start, source = None, "sources_changed"
         if start is None:
             days = c.first_run_days(config)
+            prefix = "sources_changed" if source == "sources_changed" else "first_run"
             if days == 0:
-                start, source = datetime(1970, 1, 1, tzinfo=timezone.utc), "first_run_all_history"
+                start, source = datetime(1970, 1, 1, tzinfo=timezone.utc), f"{prefix}_all_history"
             else:
-                start, source = end - timedelta(days=days), f"first_run_{days:g}d"
+                start, source = end - timedelta(days=days), f"{prefix}_{days:g}d"
     if start > end:
         start = end
 
@@ -329,9 +296,49 @@ def main():
         errors.append(f"no session folder found for this project: {sess_dir}")
     turns.sort(key=lambda t: t[0])
     turns = [t[1] for t in turns]
-    memories, memory_files = _load_memories(mem_dir, skipped)
-    if not mem_dir.is_dir():
-        errors.append(f"no auto-memory folder yet: {mem_dir}")
+    skipped.update({"unreadable_core_notes": [], "unreadable_notes": []})
+
+    # Native memory: compared unless MEMORY.md is a redirect and the user
+    # hasn't configured sources yet (then proposing native memories would
+    # rebuild the layer they emptied: the report asks for setup instead).
+    redirect = v.detect_redirect(mem_dir)
+    has_native = any(s["type"] == "native" for s in sources)
+    memories, memory_files = [], []
+    if not has_native:
+        native_comparison = "not_configured"
+    elif redirect["status"] != "none" and config["sources"] is None:
+        native_comparison = "suppressed_redirect"
+    else:
+        native_comparison = "full"
+        memories, memory_files = _load_memories(mem_dir, skipped)
+        if not mem_dir.is_dir():
+            errors.append(f"no auto-memory folder yet: {mem_dir}")
+    setup_needed = native_comparison == "suppressed_redirect"
+
+    # Vault sources: a compact index of every included note, core notes in
+    # full. Nothing else is copied; find.py searches and fetches on demand.
+    index_items, core_items, source_info = [], [], []
+    for src in sources:
+        if src["type"] != "vault":
+            source_info.append({"id": src["id"], "type": "native", "memory_dir": str(mem_dir),
+                                "comparison": native_comparison})
+            continue
+        core = set(src["core"])
+        count = 0
+        for rel, path in v.iter_notes(src, ws):
+            text, sha, err = v.read_note(path)
+            if err:
+                key = "unreadable_core_notes" if rel in core else "unreadable_notes"
+                skipped[key].append(f"{src['id']}:{rel}: {err}")
+                continue
+            count += 1
+            index_items.append({"source": src["id"], "path": rel, "headings": v.headings(text),
+                                "bytes": len(text.encode("utf-8")), "sha": sha})
+            if rel in core:
+                core_items.append({"source": src["id"], "path": rel, "sha": sha, "text": text})
+        source_info.append({"id": src["id"], "type": "vault", "root": str(src["root"]),
+                            "core": src["core"], "exclude": v.DEFAULT_EXCLUDES + src["exclude"],
+                            "notes_indexed": count})
 
     # This run's shards go in their own folder, so an overlapping reader
     # never sees a half-replaced set. Earlier runs' folders are removed only
@@ -358,7 +365,12 @@ def main():
 
     # Unreadable memories make the comparison incomplete too: the checkpoint
     # holds, so the window is compared again once they can be read.
-    complete = not skipped["unreadable_transcripts"] and not skipped["unreadable_memories"]
+    # Unreadable core notes too (a configured source that can't be read at
+    # all already stopped the pass as a config problem). Other unreadable
+    # vault notes are listed, not blocking: one bad file in a big vault
+    # mustn't freeze the checkpoint forever.
+    complete = not (skipped["unreadable_transcripts"] or skipped["unreadable_memories"]
+                    or skipped["unreadable_core_notes"])
     manifest = {
         "run_id": run_id,
         "complete": complete,
@@ -380,6 +392,16 @@ def main():
         "existing_memory_count": len(memory_files),
         "turns_shard_files": _write_shards(turns, intake, "turns", "text"),
         "memories_shard_files": _write_shards(memories, intake, "memories", "body"),
+        "sources": source_info,
+        "sources_fingerprint": fp,
+        "native_status": redirect,
+        "native_comparison": native_comparison,
+        "setup_needed": setup_needed,
+        "suggested_setup": v.suggest_setup(project_dir, mem_dir) if setup_needed else None,
+        "core_shard_files": _write_shards(core_items, intake, "core", "text"),
+        "vault_index_shard_files": _write_shards(index_items, intake, "index", "path"),
+        "find_limits": {"max_searches": config["max_searches"], "max_fetches": config["max_fetches"]},
+        "routing": config["routing"],
         "skipped": skipped,
         "errors": errors,
         "warning": None if turns else "no session turns in this window (a quiet period, not an error)",

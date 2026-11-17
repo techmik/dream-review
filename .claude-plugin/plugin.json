@@ -1,7 +1,7 @@
 {
   "name": "dream-review",
-  "version": "0.1.4",
-  "description": "A review-first \"dreaming\" pass over Claude Code's auto-memory: reads recent sessions, proposes new, stale and duplicate memories with quoted evidence, and never writes memory without your approval.",
+  "version": "0.2.0",
+  "description": "A review-first \"dreaming\" pass over Claude Code memory, in the native memory folder, a notes vault, or both: reads recent sessions, proposes new, stale and duplicate memories and note changes with quoted evidence, and never writes without your approval.",
   "author": {
     "name": "techmik",
     "email": "599635+techmik@users.noreply.github.com",

@@ -90,8 +90,11 @@ def main():
         return 0
 
     state_file = ws / c.STATE_NAME
-    c.atomic_write(state_file, json.dumps(
-        {"last_successful_scan_through": manifest["window_end"], "run_id": run_id}, indent=2))
+    state = {"last_successful_scan_through": manifest["window_end"], "run_id": run_id}
+    if manifest.get("sources_fingerprint"):
+        # So a later change of sources triggers a reconciliation window.
+        state["sources_fingerprint"] = manifest["sources_fingerprint"]
+    c.atomic_write(state_file, json.dumps(state, indent=2))
     c.release_lock(ws, run_id)
     print(json.dumps({"last_successful_scan_through": manifest["window_end"],
                       "state_file": str(state_file)}))
