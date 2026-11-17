@@ -17,6 +17,8 @@ import hashlib
 import json
 import os
 import re
+import string
+from datetime import date
 from pathlib import Path
 
 import _common as c
@@ -43,6 +45,8 @@ EXTRA_CONFIG = {
     # Per-pass caps for find.py.
     "max_searches": 20,
     "max_fetches": 15,
+    # Daily-note backfill (0.3.0); None = off. See resolve_daily().
+    "daily_notes": None,
 }
 ALL_KEYS = {**c.DEFAULT_CONFIG, **EXTRA_CONFIG}
 
@@ -174,6 +178,124 @@ def fingerprint(sources):
 
 
 DEFAULT_FINGERPRINT = fingerprint([{"id": "native", "type": "native"}])
+
+
+# ------------------------------------------------------------- daily notes
+
+MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+          "August", "September", "October", "November", "December"]
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+DAILY_TOKENS = {"YYYY", "MM", "DD", "Month", "Mon", "Weekday"}
+
+
+def daily_rel_path(pattern, day):
+    """The note path for a date. Month and weekday names are English, on
+    purpose: they mustn't change with the machine's language settings."""
+    return pattern.format(YYYY=f"{day.year:04d}", MM=f"{day.month:02d}", DD=f"{day.day:02d}",
+                          Month=MONTHS[day.month - 1], Mon=MONTHS[day.month - 1][:3],
+                          Weekday=WEEKDAYS[day.weekday()])
+
+
+def _pattern_problem(pattern):
+    """None if path_pattern is usable, else a sentence saying why not. Parsed
+    the way str.format will read it, so a stray or doubled brace, a format
+    spec, or a pattern that renders the same path for every date is caught
+    here rather than crashing (or misfiling) during a pass."""
+    if not isinstance(pattern, str) or not _rel_ok(pattern) or not pattern.lower().endswith(".md"):
+        return ("daily_notes.path_pattern must be a relative .md path, "
+                "e.g. \"Daily Notes/{YYYY}-{MM}-{DD}.md\"")
+    try:
+        fields = list(string.Formatter().parse(pattern))
+    except ValueError:
+        return "daily_notes.path_pattern has an unmatched { or }"
+    tokens = set()
+    for literal, field, spec, conversion in fields:
+        if "{" in literal or "}" in literal:
+            return "daily_notes.path_pattern can't contain doubled braces ({{ or }})"
+        if field is None:
+            continue
+        if spec or conversion:
+            return f"daily_notes.path_pattern: write {{{field}}} without a format spec"
+        tokens.add(field)
+    unknown = tokens - DAILY_TOKENS
+    if unknown:
+        return ("daily_notes.path_pattern: unknown placeholder(s) "
+                + ", ".join("{" + t + "}" for t in sorted(unknown)))
+    if not {"YYYY", "DD"} <= tokens or not ({"MM", "Month", "Mon"} & tokens):
+        return "daily_notes.path_pattern needs {YYYY}, {DD} and a month ({MM}, {Month} or {Mon})"
+    try:
+        a = daily_rel_path(pattern, date(2001, 2, 3))
+        b = daily_rel_path(pattern, date(2002, 4, 5))
+    except (ValueError, KeyError, IndexError) as e:
+        return f"daily_notes.path_pattern can't be filled in ({e.__class__.__name__})"
+    if a == b or not _rel_ok(a):
+        return "daily_notes.path_pattern must give a different path for each date"
+    return None
+
+
+def resolve_daily(config, sources):
+    """(daily, problems). daily is None when off, else a dict: source (the
+    vault source dict), pattern, template (source, path) or None,
+    create_missing, tz (a tzinfo, or None = this machine's local time) and
+    tz_name."""
+    raw = config.get("daily_notes")
+    if raw is None:
+        return None, []
+    if not isinstance(raw, dict):
+        return None, ["daily_notes must be an object"]
+    problems = []
+    extra = sorted(set(raw) - {"source", "path_pattern", "template", "timezone", "create_missing"})
+    if extra:
+        problems.append("daily_notes: unknown key(s) " + ", ".join(extra))
+    vaults = {s["id"]: s for s in sources if s["type"] == "vault"}
+    src = vaults.get(raw.get("source"))
+    if src is None:
+        problems.append("daily_notes.source must be the id of a vault source")
+    pattern = raw.get("path_pattern")
+    pattern_problem = _pattern_problem(pattern)
+    if pattern_problem:
+        problems.append(pattern_problem)
+    template = None
+    tpl = raw.get("template")
+    if tpl is not None:
+        tsid, sep, trel = tpl.partition(":") if isinstance(tpl, str) else ("", "", "")
+        tsrc = vaults.get(tsid)
+        tpath = note_path(tsrc, trel) if (sep and tsrc) else None
+        if tpath is None or not tpath.is_file():
+            problems.append("daily_notes.template must be \"<vault id>:<path>\" of an existing note")
+        else:
+            template = (tsid, Path(trel).as_posix())
+    create_missing = raw.get("create_missing", False)
+    if not isinstance(create_missing, bool):
+        problems.append("daily_notes.create_missing must be true or false")
+        create_missing = False
+    if create_missing and template is None:
+        problems.append("daily_notes.create_missing needs a template")
+    tz, tz_name = None, "local"
+    name = raw.get("timezone")
+    if name is not None:
+        try:
+            from zoneinfo import ZoneInfo
+            tz, tz_name = ZoneInfo(str(name)), str(name)
+        except Exception:  # noqa: BLE001 - ZoneInfoNotFoundError, ValueError, ImportError
+            problems.append(f"daily_notes.timezone '{name}' isn't available here (on Windows, "
+                            "Python needs the tzdata package for named zones); leave it out to "
+                            "use this computer's local time")
+    if problems:
+        return None, problems
+    return {"source": src, "pattern": pattern, "template": template,
+            "create_missing": create_missing, "tz": tz, "tz_name": tz_name}, []
+
+
+def local_date(ts, tz):
+    """The calendar date of an aware UTC datetime in tz (None = this
+    machine's local time, DST included, through the operating system)."""
+    return (ts.astimezone(tz) if tz else ts.astimezone()).date()
+
+
+def logged_ids(text):
+    """dream-review entry ids already in a note: <!-- dream-review:<session>:<date> -->."""
+    return set(re.findall(r"<!--\s*dream-review:([^\s:>]+:\d{4}-\d{2}-\d{2})\s*-->", text or ""))
 
 
 # ------------------------------------------------------------- vault walk

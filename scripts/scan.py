@@ -33,6 +33,7 @@ that succeeds. With no checkpoint yet (the first pass) it reads back
 `first_run_days` (config, default 7; 0 = all history).
 """
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -208,6 +209,8 @@ def main():
     config, problems = v.read_config(ws)
     sources, source_problems = v.resolve_sources(config, ws)
     problems += source_problems
+    daily, daily_problems = v.resolve_daily(config, sources) if not source_problems else (None, [])
+    problems += daily_problems
     sess_dir = c.sessions_dir(project_dir)
     mem_dir = c.memory_dir(project_dir)
 
@@ -254,6 +257,10 @@ def main():
         return 4
 
     fp = v.fingerprint(sources)
+    if daily:
+        # Turning daily notes on (or changing them) re-reads the first-run
+        # window too; with it off the fingerprint is the same as in 0.2.0.
+        fp += "-d" + hashlib.sha1(json.dumps(config["daily_notes"], sort_keys=True).encode("utf-8")).hexdigest()[:6]
     now = datetime.now(timezone.utc)
     end = now - timedelta(minutes=SETTLE_MINUTES)
     start, source = None, None
@@ -278,7 +285,19 @@ def main():
     if start > end:
         start = end
 
-    skipped = {"unreadable_transcripts": [], "unreadable_memories": [],
+    # Daily notes keep their own progress marker: a date is only written up
+    # once the window has passed that date's local midnight, so a pass during
+    # the day (or one cut off just before midnight) leaves the date open and
+    # the next pass reads back to the marker. Turns read only for that reason
+    # are flagged daily_only: memory proposals ignore them.
+    read_start = start
+    if daily and source == "last_successful_run":
+        state = c.read_json(ws / c.STATE_NAME) or {}
+        marker = c.parse_iso_utc(state.get("daily_through")) if isinstance(state, dict) else None
+        if marker is not None and marker < start:
+            read_start = marker
+
+    skipped = {"unreadable_transcripts": [], "unreadable_memories": [], "unreadable_daily_notes": [],
                "torn_lines": 0, "torn_last_lines": 0, "malformed_records": 0,
                "bad_timestamps": 0, "meta_records": 0, "truncated_turns": 0}
     turns, sessions, errors = [], set(), []
@@ -289,12 +308,80 @@ def main():
             except OSError as e:
                 skipped["unreadable_transcripts"].append(f"{path.name}: {e.__class__.__name__}")
                 continue
-            if mtime < start:
+            if mtime < read_start:
                 continue  # untouched since before the window: nothing new in it
-            _scan_session(path, start, end, int(config["max_turn_chars"]), turns, sessions, skipped)
+            _scan_session(path, read_start, end, int(config["max_turn_chars"]), turns, sessions, skipped)
     else:
         errors.append(f"no session folder found for this project: {sess_dir}")
     turns.sort(key=lambda t: t[0])
+    daily_only = 0
+    for ts, item in turns:
+        if ts < start:
+            item["daily_only"] = True
+            daily_only += 1
+    # Sessions seen only through daily-only turns aren't new for memory.
+    sessions = {item["sessionId"] for ts, item in turns if ts >= start}
+
+    # Daily notes (0.3.0): which local date each turn falls on, and for every
+    # settled past date (never today: a live session may still be writing
+    # that note) a copy of the day's note, or "missing", plus the dream-review
+    # entry ids already in it so nothing is proposed twice.
+    daily_info, daily_items = {"enabled": False}, []
+    if daily:
+        today = v.local_date(now, daily["tz"])
+        # Dates before the window end's local date are complete: every turn
+        # of theirs is at or before window_end. Later dates wait.
+        settled_before = v.local_date(end, daily["tz"])
+        midnight = datetime(settled_before.year, settled_before.month, settled_before.day,
+                            tzinfo=daily["tz"]) if daily["tz"] else \
+            datetime(settled_before.year, settled_before.month, settled_before.day).astimezone()
+        daily_through_next = midnight.astimezone(timezone.utc)
+        by_date = {}
+        for ts, item in turns:
+            d = v.local_date(ts, daily["tz"])
+            item["local_date"] = d.isoformat()
+            item["local_time"] = (ts.astimezone(daily["tz"]) if daily["tz"] else ts.astimezone()).strftime("%H:%M")
+            if d < settled_before:
+                by_date.setdefault(d, []).append(item)
+        dates = []
+        for d in sorted(by_date):
+            rel = v.daily_rel_path(daily["pattern"], d)
+            path = v.note_path(daily["source"], rel)
+            # Not "sessions": that name is the pass's own set of sessions.
+            day_sessions = sorted({t["sessionId"] for t in by_date[d]})
+            entry = {"date": d.isoformat(), "path": rel, "sessions": day_sessions,
+                     "first_turn": by_date[d][0]["local_time"], "last_turn": by_date[d][-1]["local_time"]}
+            if path is None:
+                # Not "missing": never proposed, only reported.
+                entry.update(exists=None, blocked="path not allowed (excluded or outside the vault)")
+            elif path.is_file():
+                text, sha, err = v.read_note(path)
+                if err:
+                    entry.update(exists=True, unreadable=err)
+                    skipped["unreadable_daily_notes"].append(f"{rel}: {err}")
+                else:
+                    entry.update(exists=True, sha=sha,
+                                 already_logged=sorted(i for i in v.logged_ids(text) if i.endswith(d.isoformat())))
+                    daily_items.append({"date": d.isoformat(), "path": rel, "sha": sha, "text": text})
+            else:
+                entry.update(exists=False)
+            dates.append(entry)
+        if daily["create_missing"] and any(e["exists"] is False for e in dates):
+            tsid, trel = daily["template"]
+            tsrc = next(s for s in sources if s["id"] == tsid)
+            ttext, tsha, terr = v.read_note(v.note_path(tsrc, trel))
+            if terr:
+                # Counted, so the scan is incomplete and the dates are retried.
+                skipped["unreadable_daily_notes"].append(f"template {tsid}:{trel}: {terr}")
+            else:
+                daily_items.append({"template": f"{tsid}:{trel}", "sha": tsha, "text": ttext})
+        daily_info = {"enabled": True, "source": daily["source"]["id"], "timezone": daily["tz_name"],
+                      "today_local": today.isoformat(), "settled_before": settled_before.isoformat(),
+                      "daily_through_next": daily_through_next.isoformat(),
+                      "daily_only_turns": daily_only, "create_missing": daily["create_missing"],
+                      "template": f"{daily['template'][0]}:{daily['template'][1]}" if daily["template"] else None,
+                      "dates": dates}
+
     turns = [t[1] for t in turns]
     skipped.update({"unreadable_core_notes": [], "unreadable_notes": []})
 
@@ -370,7 +457,7 @@ def main():
     # vault notes are listed, not blocking: one bad file in a big vault
     # mustn't freeze the checkpoint forever.
     complete = not (skipped["unreadable_transcripts"] or skipped["unreadable_memories"]
-                    or skipped["unreadable_core_notes"])
+                    or skipped["unreadable_core_notes"] or skipped["unreadable_daily_notes"])
     manifest = {
         "run_id": run_id,
         "complete": complete,
@@ -401,6 +488,8 @@ def main():
         "core_shard_files": _write_shards(core_items, intake, "core", "text"),
         "vault_index_shard_files": _write_shards(index_items, intake, "index", "path"),
         "find_limits": {"max_searches": config["max_searches"], "max_fetches": config["max_fetches"]},
+        "daily_notes": daily_info,
+        "daily_shard_files": _write_shards(daily_items, intake, "daily", "text"),
         "routing": config["routing"],
         "skipped": skipped,
         "errors": errors,

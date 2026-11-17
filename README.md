@@ -7,7 +7,7 @@ Each run reads the project's recent sessions, compares them with your existing m
 - **New memories:** things you said or decided that will matter later but aren't in memory yet.
 - **Stale memories:** memories a recent session contradicts or supersedes.
 - **Duplicates and conflicts:** memories that overlap or disagree.
-- **Vault changes** (if you use a notes vault): text to add to a note, under a named heading; a new note for a folder; a note a recent session contradicts.
+- **Vault changes** (if you use a notes vault): text to add to a note, under a named heading; a new note for a folder; a note a recent session contradicts; optionally, entries for past days' daily notes.
 - **Skill candidates:** the same kind of work coming up three or more times across nights, with no skill covering it.
 - **Rule candidates** (optional): one of your own blocking hooks firing three or more times in two weeks on the same thing, with a fix that would stop the attempt earlier.
 
@@ -104,7 +104,27 @@ Many setups keep memory in an Obsidian vault or a folder of notes instead of (or
 - `routing`: with two sources, one line in your own words on what goes where.
 - `rules_note`, `templates`: used only when the review applies a change, for formatting (frontmatter, folder index lines, note shape). They can't authorize anything else.
 
-The pass reads your vault only through the plugin's own scripts and writes nothing to it. Proposals name the exact note, heading and text. The review backs up each file, refuses to edit one that changed since the pass without asking you again, and never deletes or renames anything. Daily-note entries aren't proposed yet: sessions don't show everything that happened in a day, so a backfill could log work as done that wasn't.
+The pass reads your vault only through the plugin's own scripts and writes nothing to it. Proposals name the exact note, heading and text. The review backs up each file, refuses to edit one that changed since the pass without asking you again, and never deletes or renames anything. ### Daily notes (optional)
+
+If your vault keeps a note per day, the pass can propose a **reconstructed session entry** for each past day's session the note doesn't already have. It's off until you set it:
+
+```json
+"daily_notes": {
+  "source": "vault",
+  "path_pattern": "01 - Daily Notes/{MM} - {Month} {YYYY}/{YYYY}-{MM}-{DD}.md",
+  "template": "vault:01 - Daily Notes/Daily Note Template.md",
+  "create_missing": false
+}
+```
+
+- `path_pattern`: placeholders `{YYYY}` `{MM}` `{DD}` `{Month}` (January) `{Mon}` (Jan) `{Weekday}` (Monday), always in English.
+- Dates follow this computer's local time, daylight saving included. `"timezone": "Europe/Berlin"` picks another zone; on Windows that needs Python's `tzdata` package, and without it the pass stops with a Config problem rather than guess.
+- Only finished days: a day is written up by the first pass that runs after its midnight, and today's note is never touched, since a live session may still be writing it. A pass during the day leaves today open; the next one reads back to it.
+- If the path pattern points into an excluded folder or outside the vault, that day is reported as blocked, never created.
+- Each entry is labelled as reconstructed from the visible session text and not checked against files, and every line in it rests on a quote: your words, or Claude reporting finished work you didn't contradict. A session sees only what was said in it, so the entry can miss work done elsewhere; it never claims something was done because Claude said it would do it.
+- Each entry ends with a hidden id line (`<!-- dream-review:<session>:<date> -->`), so the same session is never proposed or added twice. A session the note already covers is listed as "already logged".
+- A missing note is only reported, unless you set `create_missing` (with a `template`).
+- The review appends after the last session section and never rewrites earlier entries.
 
 Not covered: memory kept only in a database or an MCP memory server (no files to compare), and chats outside Claude Code (no transcripts). Tested against a vault built from a popular public template and a hybrid real setup, not a wide range of real vaults yet: please open an issue if yours trips it.
 

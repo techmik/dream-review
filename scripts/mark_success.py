@@ -94,6 +94,10 @@ def main():
     if manifest.get("sources_fingerprint"):
         # So a later change of sources triggers a reconciliation window.
         state["sources_fingerprint"] = manifest["sources_fingerprint"]
+    daily = manifest.get("daily_notes")
+    if isinstance(daily, dict) and daily.get("daily_through_next"):
+        # Daily notes' own marker: dates from here on aren't written up yet.
+        state["daily_through"] = daily["daily_through_next"]
     c.atomic_write(state_file, json.dumps(state, indent=2))
     c.release_lock(ws, run_id)
     print(json.dumps({"last_successful_scan_through": manifest["window_end"],
