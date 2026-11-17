@@ -27,15 +27,15 @@ The two can coexist. If both run, memory may change between a dream-review pass 
 /plugin install dream-review@dream-review
 ```
 
-Needs Python 3.8+ on your PATH as `python3` or `python` (standard library only). On Windows, Claude Code should be using Git Bash for the start-of-session hook.
+Needs Python 3.10 or newer on your PATH as `python3` or `python` (standard library only; tested on 3.12). On Windows, Claude Code should be using Git Bash for the start-of-session hook.
 
 ## Use
 
-- **Run a pass:** "run dream-review" (or "run the dream pass"). Takes a minute or two; ends with counts per category and a line confirming no memory file changed.
+- **Run a pass:** "run dream-review" (or "run the dream pass"). Takes a few minutes, longer with a large memory folder; ends with counts per category and a line confirming no memory file changed.
 - **Review:** "review my dreams". Claude walks you through the unreviewed proposals, re-checks each one, takes a git snapshot of the memory folder if it's a repo, applies only what you approve, and marks the section Reviewed.
 - **Reminder:** at the start of each session the plugin names any unreviewed nights for that project. Silent when there's nothing pending.
 
-The first pass in a project looks back 24 hours. After that each pass starts where the last successful one ended, so a missed night is picked up by the next run. The last 10 minutes are always left for the next pass, so a session that's still being written isn't read half-finished.
+The first pass in a project looks back 7 days (change it with `first_run_days`, below). After that each pass starts where the last successful one ended, so a missed night is picked up by the next run. The last 10 minutes are always left for the next pass, so a session that's still being written isn't read half-finished.
 
 ## Where things live
 
@@ -63,13 +63,15 @@ Create `config.json` in the project's workspace folder:
 {
   "hook_block_log": "~/.claude/hook_blocks.log",
   "archive_threshold_days": 7,
-  "max_turn_chars": 4000
+  "max_turn_chars": 4000,
+  "first_run_days": 7
 }
 ```
 
 - `hook_block_log`: turns on rule candidates. A tab-separated file with one line per block: `<utc-iso-time> <hook> <tool> <reason-label> <session-id>`. `examples/log_hook_block.sh` shows a helper your hooks can call.
 - `archive_threshold_days`: how long a reviewed section stays in the live report.
 - `max_turn_chars`: longer turns are cut to this length. The report says how many were cut.
+- `first_run_days`: how far back the first pass reads, before there's a checkpoint. `0` reads all history: on a project you've used for months that can be hundreds of sessions, a long and costly pass, and a report too big to review carefully. Most of that older history is usually in memory already. Set it before the first pass; it has no effect after.
 
 ## Unattended runs
 

@@ -27,7 +27,8 @@ Usage:
 
 Without --hours the window starts at the last successful run's checkpoint
 (written by mark_success.py), so a missed night is picked up by the next run
-that succeeds. With no checkpoint yet it falls back to the last 24 hours.
+that succeeds. With no checkpoint yet (the first pass) it reads back
+`first_run_days` (config, default 7; 0 = all history).
 """
 import argparse
 import json
@@ -249,7 +250,11 @@ def main():
         start = c.parse_iso_utc(state.get("last_successful_scan_through")) if isinstance(state, dict) else None
         source = "last_successful_run" if start else None
         if start is None:
-            start, source = end - timedelta(hours=24), "default_24h_no_checkpoint"
+            days = c.first_run_days(config)
+            if days == 0:
+                start, source = datetime(1970, 1, 1, tzinfo=timezone.utc), "first_run_all_history"
+            else:
+                start, source = end - timedelta(days=days), f"first_run_{days:g}d"
     if start > end:
         start = end
 

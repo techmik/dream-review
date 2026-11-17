@@ -45,7 +45,19 @@ DEFAULT_CONFIG = {
     "archive_threshold_days": 7,
     # Per-turn text cap; longer turns are cut and counted in the manifest.
     "max_turn_chars": 4000,
+    # How far back the FIRST pass in a project reads (no checkpoint yet).
+    # 0 = all history: can be very large on a long-used project.
+    "first_run_days": 7,
 }
+
+
+def first_run_days(config):
+    """The first_run_days setting as a number >= 0; anything else (a string,
+    a negative number, true/false) falls back to the default."""
+    value = config.get("first_run_days")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return DEFAULT_CONFIG["first_run_days"]
+    return value
 
 
 def add_common_args(parser):
