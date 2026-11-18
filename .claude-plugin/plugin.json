@@ -1,6 +1,6 @@
 {
   "name": "dream-review",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A review-first \"dreaming\" pass over Claude Code memory, in the native memory folder, a notes vault, or both: reads recent sessions, proposes new, stale and duplicate memories and note changes with quoted evidence, and never writes without your approval.",
   "author": {
     "name": "techmik",

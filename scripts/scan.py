@@ -13,6 +13,9 @@ What it keeps from a transcript: the visible text of "user" and "assistant"
 turns. Tool calls, tool results, images, thinking blocks and meta records
 (text Claude Code injects, such as loaded skill bodies) are dropped on
 purpose. Subagent transcripts (in per-session subfolders) are not read.
+Recognisable secrets (keys, tokens, "password=" values) in turn text and
+native memories are replaced with [REDACTED:<kind>] (see _redact.py); vault
+and daily-note text is passed through as is, since edits are applied to it.
 
 Nothing is skipped silently: unreadable files, malformed records, torn lines
 and cut-off turns are all counted in the manifest's "skipped" block. If a
@@ -44,6 +47,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common as c  # noqa: E402
 import _vault as v  # noqa: E402
+from _redact import redact  # noqa: E402
 from _shards import write_shards  # noqa: E402
 
 # Shard size limits and splitting live in _shards.py.
@@ -68,7 +72,7 @@ def _text_blocks(content):
                     yield text
 
 
-def _scan_session(path, start, end, max_chars, turns, sessions, skipped):
+def _scan_session(path, start, end, max_chars, turns, sessions, skipped, redactions):
     try:
         with path.open("r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -109,7 +113,9 @@ def _scan_session(path, start, end, max_chars, turns, sessions, skipped):
             continue
         session_id = record.get("sessionId") if isinstance(record.get("sessionId"), str) else path.stem
         sessions.add(session_id)
-        text = "\n".join(parts)
+        # Redact before the cut, so a key straddling it can't survive as a
+        # partial match.
+        text = redact("\n".join(parts), redactions)
         truncated = len(text) > max_chars
         if truncated:
             skipped["truncated_turns"] += 1
@@ -153,7 +159,7 @@ def _parse_frontmatter(text):
     return result, body
 
 
-def _load_memories(mem_dir, skipped):
+def _load_memories(mem_dir, skipped, redactions):
     """Every top-level *.md in the memory folder. MEMORY.md (the index Claude
     Code loads each session) is included, marked "index": true."""
     items, files = [], []
@@ -174,9 +180,9 @@ def _load_memories(mem_dir, skipped):
             "index": path.name == "MEMORY.md" or path.name.startswith("MEMORY-"),
             "name": fm.get("name", ""),
             "type": meta.get("type", fm.get("type", "")),
-            "description": fm.get("description", ""),
+            "description": redact(fm.get("description", ""), redactions),
         }
-        items.append(dict(base, body=body.strip()))
+        items.append(dict(base, body=redact(body.strip(), redactions)))
     return items, files
 
 
@@ -300,7 +306,7 @@ def main():
     skipped = {"unreadable_transcripts": [], "unreadable_memories": [], "unreadable_daily_notes": [],
                "torn_lines": 0, "torn_last_lines": 0, "malformed_records": 0,
                "bad_timestamps": 0, "meta_records": 0, "truncated_turns": 0}
-    turns, sessions, errors = [], set(), []
+    turns, sessions, errors, redactions = [], set(), [], {}
     if sess_dir.is_dir():
         for path in sess_dir.glob("*.jsonl"):
             try:
@@ -310,7 +316,8 @@ def main():
                 continue
             if mtime < read_start:
                 continue  # untouched since before the window: nothing new in it
-            _scan_session(path, read_start, end, int(config["max_turn_chars"]), turns, sessions, skipped)
+            _scan_session(path, read_start, end, int(config["max_turn_chars"]), turns, sessions, skipped,
+                          redactions)
     else:
         errors.append(f"no session folder found for this project: {sess_dir}")
     turns.sort(key=lambda t: t[0])
@@ -397,7 +404,7 @@ def main():
         native_comparison = "suppressed_redirect"
     else:
         native_comparison = "full"
-        memories, memory_files = _load_memories(mem_dir, skipped)
+        memories, memory_files = _load_memories(mem_dir, skipped, redactions)
         if not mem_dir.is_dir():
             errors.append(f"no auto-memory folder yet: {mem_dir}")
     setup_needed = native_comparison == "suppressed_redirect"
@@ -492,6 +499,8 @@ def main():
         "daily_shard_files": _write_shards(daily_items, intake, "daily", "text"),
         "routing": config["routing"],
         "skipped": skipped,
+        # Secrets replaced in turns and native memories, by kind (no values).
+        "redactions": redactions,
         "errors": errors,
         "warning": None if turns else "no session turns in this window (a quiet period, not an error)",
     }

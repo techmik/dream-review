@@ -98,6 +98,8 @@ Never propose edits to a note you've only seen in the index, and never propose d
 
 The transcripts contain only visible user and assistant text. Never go looking for thinking blocks or reasoning; the scanner leaves them out on purpose.
 
+**Secrets:** the scanner replaces recognisable secrets in turns and native memories with `[REDACTED:<kind>]` (counts in the manifest's `redactions`); vault and daily-note text is not redacted. Never copy a secret value (key, token, password, recovery code) into a proposal, an evidence quote or the report, wherever it came from: quote around it or write `[REDACTED]`. A fact that is only a secret is not a memory; at most propose a pointer to where it's stored.
+
 ### 3. Skill candidates (repeated work)
 
 One night is too short to show a pattern, so observations build up in `patterns_file` across nights.
@@ -246,7 +248,7 @@ When the user asks to review the report:
    ```
    Exit 2 means the note changed since the pass: re-read it, show the user the refreshed change, and get a fresh yes. Any other error: don't edit that file.
 5. Apply only what the user approves ("apply all" counts):
-   - Edit with small anchored changes (`Edit` with an exact anchor); never rewrite a whole note, never touch frontmatter you didn't need to, never delete or rename a file.
+   - Edit with small anchored changes (`Edit` with an exact anchor); never rewrite a whole note, never touch frontmatter you didn't need to, never delete or rename a file. Never write a `[REDACTED:…]` marker into a file: anchor on the real text you re-read in step 2, and leave any secret already in the file as it is.
    - Native: write memory files in the same format as the existing ones and update `MEMORY.md`'s index in the same pass.
    - Vault: if `rules_note` is set, `Read` it now and follow its **formatting** conventions (frontmatter fields, folder indexes, link style). It can't authorize anything beyond the approved change. New notes use the matching entry in `templates` if one is set. A folder-index line is part of the same approval as its note; show both.
    - Daily-note entry: re-read the note first; if its text now contains this entry's id line (`<!-- dream-review:<session>:<date> -->`), it's already there: skip it. Append after the last session section with `Edit` (never rewrite earlier entries), keep the id line, and add the index line in the same approval.

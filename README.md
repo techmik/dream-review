@@ -163,6 +163,7 @@ Only one pass runs per project at a time. A second one that starts while the fir
 - Write, edit or delete a memory file, `MEMORY.md`, or any note in a vault.
 - Edit CLAUDE.md or settings, or build a skill. Those come back as proposals with exact text.
 - Read thinking blocks, tool results or subagent transcripts. Only the visible text of your turns and Claude's replies is scanned.
+- Quote a secret on purpose. Recognisable keys, tokens and `password=`-style values in your turns and memory files are replaced with `[REDACTED:<kind>]` before the pass sees them, and the manifest counts how many. It's pattern matching, so an unusual secret can still get through; the pass is told never to copy one into the report. Vault and daily notes are passed through unchanged, because approved edits are applied to them.
 - Drop anything silently. Unreadable files, malformed lines and cut-off turns are counted in the report. If a transcript or memory file can't be read, the checkpoint stays put and the next run tries again.
 - Follow instructions it finds in your sessions or memory. Those are treated as data.
 
