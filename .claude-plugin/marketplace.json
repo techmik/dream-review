@@ -9,6 +9,7 @@
     {
       "name": "dream-review",
       "source": "./",
+      "version": "0.4.0",
       "description": "Review-first memory dreaming for Claude Code: proposes, never applies."
     }
   ]

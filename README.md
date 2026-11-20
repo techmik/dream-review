@@ -11,7 +11,7 @@ Each run reads the project's recent sessions, compares them with your existing m
 - **Skill candidates:** the same kind of work coming up three or more times across nights, with no skill covering it.
 - **Rule candidates** (optional): one of your own blocking hooks firing three or more times in two weeks on the same thing, with a fix that would stop the attempt earlier.
 
-Every proposal quotes its evidence: the session, the timestamp and the exact words. Nothing touches your memory until you review the report and approve.
+Every proposal quotes its evidence: the session, the timestamp and the exact words. Since 0.4.0 a script checks each quote against the scanned sessions, and the pass can't finish while a quote isn't found (see [Quote check](#quote-check)). Nothing touches your memory until you review the report and approve.
 
 ## Why review-first
 
@@ -50,6 +50,7 @@ All working files are kept per project in their own folder, outside the plugin (
   skill_patterns.json      tags per night, for skill candidates
   dream_state.json         checkpoint
   scan_manifest.json, intake/   the last scan's output
+  quote_check.json         the last quote check's verdicts (for reading; the checkpoint step re-checks)
   backups/                 a copy of every file the review changed, plus log.jsonl
   config.json              optional settings (below)
 ```
@@ -167,6 +168,19 @@ Only one pass runs per project at a time. A second one that starts while the fir
 - Drop anything silently. Unreadable files, malformed lines and cut-off turns are counted in the report. If a transcript or memory file can't be read, the checkpoint stays put and the next run tries again.
 - Follow instructions it finds in your sessions or memory. Those are treated as data.
 
+## Quote check
+
+After writing the report, the pass runs `verify_quotes.py` on that run's section. It checks two things:
+
+- Every proposal that rests on something said in a session (new memories, stale memories, vault additions, new notes, stale notes, daily entries) has an `Evidence:` line.
+- Every quote on those lines appears in one turn of the named session, as whole words and in order, and that same turn is within two minutes of the given time (and is the user's, when the quote is tagged `(user)`). Case, curly quotes, the kind of dash and spacing don't matter, punctuation and the number of dashes do; `...` can skip words inside one turn; `[REDACTED]` has to line up with a secret the scanner masked. A full session id has to match exactly, a short one has to match a single session.
+
+Each quote gets a verdict: verified, found at the wrong time, tagged `(user)` but only Claude said it, too short to check, not found, or unparsed (not in the expected `session <id>, <date>T<time>Z: "words"` form; every quote needs its time). The report gets a line like `Quote check: 14 of 14 quotes verified`.
+
+Anything but a verified quote, or a proposal with no `Evidence:` line, blocks the pass: `mark_success.py` runs the same check itself on the report as it is at that moment and won't save the checkpoint until nothing blocks. So the pass has to copy the words exactly from the session, or drop the proposal. If it can't, it abandons, and the section says its quotes weren't verified.
+
+What it doesn't cover: it checks `Evidence:` lines, not other quoted text in the report (a quote from a memory file or note sits on the proposal line and isn't checked); a real quote can still be used out of context; duplicates, skill and rule candidates need no session quote; and the approval in the review is still Claude following the skill's instructions (plus Claude Code's own edit prompts), not a script.
+
 ## Undo
 
 Before changing any file, the review copies it to `backups/<date>/<source>/<path>` in the workspace; `backups/log.jsonl` lists every copy and which files were newly created. To undo a change, copy the backup back.
@@ -180,7 +194,7 @@ git add -A
 git commit -m "start"
 ```
 
-The plugin never runs `git init`, adds a remote or pushes.
+The snapshot only happens when the memory folder itself is the top of a git repo (it has its own `.git`). A vault or project repo that merely contains the memory folder is never committed. One case to know: if you set `autoMemoryDirectory` to the root of a vault that is a git repo, the memory folder *is* that repo, and the snapshot runs `git add -A` and commits every change in the vault that git picks up (anything your `.gitignore` excludes stays out). The plugin never runs `git init`, adds a remote or pushes.
 
 ## Credits
 

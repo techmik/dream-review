@@ -10,6 +10,13 @@ stays the same every run (easy to allowlist), and it only acts if that run
 still holds the lock (so an overlapping pass can't save someone else's
 checkpoint).
 
+It also runs the quote check itself (the same code as verify_quotes.py) on
+the report as it is now, and refuses (exit 3, "gate": "quote_check") if
+anything blocks: a quote not found, too short or unreadable, or a proposal
+with no Evidence line. It doesn't trust an earlier quote_check.json, so a
+report edited after the check, or a hand-made check file, can't get through.
+The lock stays held, so the pass can fix the report and mark again.
+
 If the scan couldn't read a transcript ("complete": false), the checkpoint
 is NOT moved: the next run retries the same window. Pass --accept-incomplete
 only when the user has decided to skip those files.
@@ -31,6 +38,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _common as c  # noqa: E402
+import verify_quotes  # noqa: E402
+
+
+def quote_gate(ws, manifest, report):
+    """Run the quote check on the report as it is now. Returns a refusal
+    reason, or None when nothing blocks."""
+    try:
+        report_bytes = report.read_bytes()
+    except OSError as e:
+        return f"could not read {report}: {e}"
+    out = verify_quotes.check_report(ws, manifest, report_bytes)
+    if "error" in out:
+        return f"quote check couldn't run: {out['error']}"
+    if out["blocking"]:
+        return (f"{out['summary']}. {out['blocking']} item(s) block the checkpoint: run "
+                "verify_quotes.py, fix what it flags (copy the words exactly from the turn shards in "
+                "the form session <id>, <date>T<time>Z: \"exact words\", add a missing Evidence line, "
+                "or drop the proposal), then run this again")
+    return None
 
 
 def main():
@@ -88,6 +114,13 @@ def main():
                           "unreadable": manifest.get("skipped", {}).get("unreadable_transcripts", [])
                                         + manifest.get("skipped", {}).get("unreadable_memories", [])}))
         return 0
+
+    reason = quote_gate(ws, manifest, report)
+    if reason:
+        print(json.dumps({"refused": True, "gate": "quote_check", "reason": reason,
+                          "checkpoint": "unchanged", "lock": "still held by this run",
+                          "run_id": run_id}))
+        return 3
 
     state_file = ws / c.STATE_NAME
     state = {"last_successful_scan_through": manifest["window_end"], "run_id": run_id}

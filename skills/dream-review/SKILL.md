@@ -1,7 +1,7 @@
 ---
 name: dream-review
 description: Review-first "dreaming" pass over Claude Code memory, wherever it lives as markdown - the native auto-memory folder, a notes vault (Obsidian and similar), or both. Reads this project's recent session transcripts, compares them with the memory, and writes proposals (new memories, stale ones, duplicates or conflicts, additions to vault notes, optional daily-note entries for past days, plus skill candidates from repeated work and optional rule candidates from repeated hook blocks) to a report, each with quoted evidence. Never writes memory or notes on its own; applying a proposal needs the user's approval in a separate review. Use when the user says "run dream-review", "dream", "run the dream pass", "review my dreams", "what did the dream pass find", "where is my dream report", "set up dream-review for my vault", or when a scheduled prompt asks for the dream-review pass.
-allowed-tools: Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/find.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/find.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/backup_note.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/backup_note.py" *)
+allowed-tools: Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/find.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/find.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/verify_quotes.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/verify_quotes.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" *), Bash(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/backup_note.py" *), Bash(python "${CLAUDE_PLUGIN_ROOT}/scripts/backup_note.py" *)
 ---
 
 # dream-review
@@ -32,7 +32,8 @@ Memory is one or more **sources** of markdown, set in the workspace's `config.js
 ### 1. Scan
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --project-dir "${CLAUDE_PROJECT_DIR}"```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --project-dir "${CLAUDE_PROJECT_DIR}"
+```
 
 Add `--hours N` only for a deliberate catch-up; normally the window starts at the last successful run's checkpoint.
 
@@ -57,7 +58,7 @@ If `errors` names a missing session folder or memory folder, say so in the summa
 
 ### 2. Draft memory proposals
 
-Compare the turns with the memory. **Every proposal quotes its evidence:** session id, timestamp and the exact words. No quote, no proposal. Prefer the user's own words over your summary of them, and don't present something you inferred as something they said. Skip anything already covered. Ignore turns that are earlier dream-review passes (their summaries aren't new facts). A quiet night with nothing to propose is a normal result.
+Compare the turns with the memory. **Every proposal quotes its evidence:** session id, timestamp and the exact words, copied from the turn (step 5b checks them by script). No quote, no proposal. Prefer the user's own words over your summary of them, and don't present something you inferred as something they said. Skip anything already covered. Ignore turns that are earlier dream-review passes (their summaries aren't new facts). A quiet night with nothing to propose is a normal result.
 
 **Native source** (when compared):
 
@@ -119,24 +120,34 @@ Only if the manifest's `hook_block_log` is set and the file exists; otherwise wr
 
 ### 5. Write the report
 
-First run the same `--heartbeat` command as in step 1 (stop as described there if it errors). Then `Read` `report_file`. If it doesn't exist, `Write` it starting with `# Dream Report`. Insert the new section **at the top, right under the title** (newest first). Never overwrite or remove earlier sections. Before adding a proposal, skim unreviewed sections and skip exact repeats.
+First run the same `--heartbeat` command as in step 1 (stop as described there if it errors). Then `Read` `report_file`. If it doesn't exist, `Write` it starting with `# Dream Report`. Insert the new section **at the top, right under the title** (newest first). Never overwrite or remove earlier sections. Before adding a proposal, skim unreviewed sections and skip exact repeats (a proposal in a section with an `Abandoned:` line isn't a repeat: its quotes were never verified, so propose it again).
 
-The header time is the manifest's `run_started_utc` (don't use your own clock). Format:
+The header time is the manifest's `run_started_utc` (don't use your own clock).
 
-```markdown
+**Evidence lines:** every proposal under New memory candidates, Stale / needs update, Add to note, New note, Stale in vault and Reconstructed session entries needs at least one `Evidence:` line, indented under it and outside any code block, in exactly this form:
+
+`Evidence: session <id>, <YYYY-MM-DD>T<HH:MM>Z: "exact words"`
+
+The id is the session id or its first 8 characters; the time is the turn's UTC timestamp. More quotes from the same session on the same line follow the closing quote with ` / ` and then their own time, which every quote needs (the date may be left off; it carries forward): `... "first words" / 15:52Z: "more words"`. Add `(user)` after the time only when that exact turn is the user's. Copy the words exactly, punctuation and dashes included; use `...` only to skip words inside one turn, and `[REDACTED]` only where the turn shows a `[REDACTED:<kind>]` marker (for any other secret, quote around it). Nothing after the closing quote, not even a period. Proposals start with `- ` at the start of the line, and any proposed note text (a new note, a daily entry) goes inside an indented code fence, with the `Evidence:` line after the fence. A memory file or note you quote goes on the proposal line itself, never in an `Evidence:` line, which is only for session turns. Duplicates, Already logged, Missing notes, skill and rule candidates need no `Evidence:` line. Step 5b checks all of this.
+
+Format:
+
+~~~markdown
 ## Night of 2026-01-15 (06:12 UTC run)
 
 Run <run_id>. Window: <window_start> to <window_end> (<cutoff_source>); <turn_count> turns, <N> sessions.
+<the summary line from step 5b, which starts "Quote check:">
 Sources: native (<native_comparison>); vault "<id>" (<notes_indexed> notes indexed, <core count> core).
 Skipped: <non-zero counts from the manifest's skipped block, or "nothing">.
 
 ### Memory
 **New memory candidates**
 - **[feedback] short-slug**: proposed body: "..."
-  Evidence: session 1a2b3c4d, 2026-01-14T15:47Z: "exact quote"
+  Evidence: session 1a2b3c4d, 2026-01-14T15:47Z (user): "exact quote"
 
 **Stale / needs update**
-- some_file.md: "exact quote" contradicts the current body (which says ...)
+- some_file.md says "..." (current body); a recent turn supersedes it: proposed new body "..."
+  Evidence: session 1a2b3c4d, 2026-01-14T16:02Z: "exact quote"
 
 **Duplicates or conflicts**
 - a.md vs b.md: both describe X; b.md is more current
@@ -144,10 +155,15 @@ Skipped: <non-zero counts from the manifest's skipped block, or "nothing">.
 ### Vault
 **Add to note**
 - vault:Projects/Postgres.md (sha 1a2b3c4d5e6f7a8b), under "## Decisions": add "..."
-  Evidence: session ..., ...: "exact quote"
+  Evidence: session 1a2b3c4d, 2026-01-14T15:47Z: "exact quote"
 
 **New note**
 - vault:Projects/New Thing.md: full text below; folder index Projects/Projects.md gets "- [[New Thing]] - ..."
+  ````
+  # New Thing
+  ...
+  ````
+  Evidence: session 1a2b3c4d, 2026-01-14T15:50Z: "exact quote"
 
 **Stale in vault**
 None found.
@@ -164,6 +180,7 @@ Coverage: vault "vault": 2 core notes read, 4 searches (14 notes matched), 3 not
   <!-- dream-review:1a2b3c4d:2026-01-14 -->
   ```
   Index line: "- **Session 3 (reconstructed):** ..."
+  Evidence: session 1a2b3c4d, 2026-01-14T14:20Z (user): "exact quote" / 14:31Z: "exact quote"
 
 **Already logged**
 - 2026-01-13, session 5e6f7a8b: note has "..." 
@@ -177,7 +194,7 @@ None found.
 
 ### Rule candidates
 None found.
-```
+~~~
 
 Leave out the `### Vault` heading when there's no vault source, the `### Daily notes` heading when `daily_notes.enabled` is false, and the native `### Memory` subsections when `native_comparison` isn't `full` (say why in the Sources line). Write `None found.` under any other empty heading. If `complete` is false, add a line: `Incomplete scan: <unreadable transcripts, memory files and core notes>; the next run retries this window.` List `unreadable_notes` (non-core) in the Skipped line; they don't hold the checkpoint.
 
@@ -192,25 +209,48 @@ Or say "set up dream-review for my vault".
 
 **Config problem** (scan exit 4): a section with the same `## Night of` header, the line `Config problem (no comparison ran, checkpoint unchanged):` and each problem as a bullet.
 
-If the pass can't finish (the report write fails, or you have to stop), release the lock without saving a checkpoint:
+If the pass can't finish (the report write fails, the quote check can't be made to pass, or you have to stop), release the lock without saving a checkpoint:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}" --abandon
 ```
 
-### 6. Mark the checkpoint (only after the report write has succeeded)
+If this run's section is already in the report when you abandon, add the line `Abandoned: <reason>; checkpoint not saved, quotes not verified.` under its Run line (before or after the abandon command, never alongside it). The review treats that section's proposals as unverified.
 
-Run this in a later step than the report write, never alongside it, and only once the write came back without an error. The script checks that the report holds this run's `Run <run_id>` line and refuses otherwise; if it refuses, fix the report write or use `--abandon`.
+### 5b. Check the quotes
+
+Once the report write has succeeded, check this run's section against the scanned turns:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}"```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/verify_quotes.py" --project-dir "${CLAUDE_PROJECT_DIR}"
+```
+
+Exit 1 means the check couldn't run (its `error` says why, e.g. no section with this run's `Run` line, or two of them): fix the report and run it again. Otherwise read `blocking` and every entry in `flagged`:
+
+- `not_found` (blocks): no turn of that session holds those words in that order (as whole words at the edges). Find the turn in the shards and copy the words exactly, or drop the proposal. Never keep a quote you can't find; words past a cut-off turn can't be quoted.
+- `too_short` (blocks): fewer than 3 letters or digits. Quote more of the turn.
+- `unparsed` (blocks): the `Evidence:` line or quote isn't in the step 5 form (`detail` says what's wrong: no closing quote, text after it, a citation not in the form above (every quote needs its time), a bad or ambiguous session id, an impossible date or time). Rewrite it.
+- `missing_evidence` (blocks): a proposal that needs evidence has no `Evidence:` line. Add one, or drop the proposal.
+- `wrong_time` (blocks): the words are there at another time (`detail` says when). Fix the time.
+- `wrong_role` (blocks): tagged `(user)`, but near that time only Claude's reply has the words. Remove `(user)` and don't present Claude's words as the user's, or quote the user's own turn (`detail` names one if it exists).
+
+After fixing, run the check again, until `blocking` is 0 and nothing is left in `flagged` that you can fix. Then replace the placeholder under the Run line with the whole `summary` line exactly as printed (it already starts with `Quote check:`), and run the check one last time. That last run must exit 0 with `blocking` 0. Don't edit the report after it.
+
+### 6. Mark the checkpoint (only after the report write has succeeded)
+
+Run this in a later step than the report write, never alongside it, and only once the write and the last quote check (step 5b) came back clean. The script checks that the report holds this run's `Run <run_id>` line and refuses otherwise; if it refuses, fix the report write or use `--abandon`. It then runs the quote check itself on the report as it is now and refuses with `"gate": "quote_check"` (exit 3) if anything blocks; it keeps the lock then, so go back to step 5b, fix what it flags and run this again. If you can't get it to pass, abandon (step 5) and say so in the summary.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/mark_success.py" --project-dir "${CLAUDE_PROJECT_DIR}"
+```
 
 It saves the checkpoint (and the sources fingerprint, so changing sources later re-reads the first-run window) and releases the lock. If the scan was incomplete it leaves the checkpoint where it was, so the next run tries those files again. Only add `--accept-incomplete` if the user tells you to skip them.
 
 ### 7. Archive old reviewed sections
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" --project-dir "${CLAUDE_PROJECT_DIR}"```
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/archive_reviewed.py" --project-dir "${CLAUDE_PROJECT_DIR}"
+```
 
 Moves sections reviewed 7+ days ago (configurable) to the archive file. Unreviewed sections never move. If it errors, mention it and carry on; it doesn't lose data.
 
@@ -236,11 +276,12 @@ When the user asks to review the report:
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/scan.py" --project-dir "${CLAUDE_PROJECT_DIR}" --paths-only
    ```
-   If `pass_running` isn't null, a pass is writing the report right now: tell the user and wait for it to finish. If `config_problems` isn't empty, tell the user before going on. Otherwise `Read` `report_file` and go through the unreviewed sections with the user, one proposal at a time or in batches they choose.
+   If `pass_running` isn't null, a pass is writing the report right now: tell the user and wait for it to finish. If `config_problems` isn't empty, tell the user before going on. Otherwise `Read` `report_file` and go through the unreviewed sections with the user, one proposal at a time or in batches they choose. A section with an `Abandoned:` line, or with no `Quote check:` line (written before 0.4.0, or by a pass that didn't finish), has unverified quotes: tell the user before they approve anything from it, and present its quotes as unchecked.
 2. **Re-check each proposal against the current files before applying it.** Days can pass between the pass and the review, and a proposal may already be done or out of date. In the review you read memory and notes directly (the user is there to approve any prompt).
 3. **Native memory:** before the first native change, take a snapshot of the memory folder (it only commits if that folder is already a git repo):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" --project-dir "${CLAUDE_PROJECT_DIR}"   ```
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot_memory.py" --project-dir "${CLAUDE_PROJECT_DIR}"
+   ```
    If it says FAILED, stop and tell the user. Only go on without a snapshot if they say so.
 4. **Every file you're about to change or create, in any source** (native included), right before the edit:
    ```bash
